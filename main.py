@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 import requests
 
-app = Flask(**name**)
+app = Flask(__name__)
 CORS(app)
 
 ASSETS = [
