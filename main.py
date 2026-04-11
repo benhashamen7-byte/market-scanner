@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 import requests
 
-app = Flask(**name**)
+app = Flask(__name__)
 CORS(app)
 
 ASSETS = [
@@ -174,6 +174,6 @@ if not asset:
 return jsonify({'error': 'not found'}), 404
 return jsonify(get_data(symbol, asset['type']))
 
-if **name** == '**main**':
+if __name__ == '**main**':
 app.run(host='0.0.0.0', port=10000)
 
