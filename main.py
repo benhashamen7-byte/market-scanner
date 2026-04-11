@@ -4,21 +4,37 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import requests
+import threading
+import time
+from datetime import datetime
 
 app = Flask(__name__)
 CORS(app)
 
+TELEGRAM_TOKEN = '7874946726:AAFmRTpLAsza2AI4oPw-9s4Crha4DJl_-BQ'
+CHAT_ID = '565025973'
+
 ASSETS = [
-    {'symbol': 'BTC-USD', 'type': 'crypto'},
-    {'symbol': 'ETH-USD', 'type': 'crypto'},
-    {'symbol': 'NVDA', 'type': 'stock'},
-    {'symbol': 'ASTS', 'type': 'stock'},
-    {'symbol': 'GC=F', 'type': 'commodity'},
-    {'symbol': 'CL=F', 'type': 'commodity'},
-    {'symbol': 'PLUG', 'type': 'stock'},
-    {'symbol': 'INVZ', 'type': 'stock'},
-    {'symbol': 'SOFI', 'type': 'stock'},
+    {'symbol': 'BTC-USD', 'type': 'crypto', 'name': 'Bitcoin'},
+    {'symbol': 'ETH-USD', 'type': 'crypto', 'name': '??\'????'},
+    {'symbol': 'NVDA', 'type': 'stock', 'name': 'Nvidia'},
+    {'symbol': 'ASTS', 'type': 'stock', 'name': 'AST SpaceMobile'},
+    {'symbol': 'GC=F', 'type': 'commodity', 'name': 'Gold'},
+    {'symbol': 'CL=F', 'type': 'commodity', 'name': 'Oil'},
+    {'symbol': 'PLUG', 'type': 'stock', 'name': 'Plug Power'},
+    {'symbol': 'INVZ', 'type': 'stock', 'name': 'Innoviz'},
+    {'symbol': 'SOFI', 'type': 'stock', 'name': 'SoFi'},
 ]
+
+def send_telegram(msg):
+    try:
+        requests.post(
+            f'https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage',
+            json={'chat_id': CHAT_ID, 'text': msg, 'parse_mode': 'HTML'},
+            timeout=10
+        )
+    except:
+        pass
 
 def rsi(series, period=14):
     try:
@@ -47,7 +63,7 @@ def bb(series, period=20):
     except:
         return None
 
-def macd(series):
+def calc_macd(series):
     try:
         m = series.ewm(span=12).mean() - series.ewm(span=26).mean()
         s = m.ewm(span=9).mean()
@@ -96,6 +112,7 @@ def get_data(symbol, asset_type):
         vc = int(d1['Volume'].iloc[-1])
         va = int(d1['Volume'].rolling(20).mean().iloc[-1])
         vol = 'high' if vc > va*1.5 else 'low' if vc < va*0.7 else 'average'
+        rsi_1d = rsi(d1['Close'])
         result = {
             'symbol': symbol,
             'price': price,
@@ -105,10 +122,10 @@ def get_data(symbol, asset_type):
             'high_52w': round(float(dw['High'].max()), 2) if not dw.empty else None,
             'low_52w': round(float(dw['Low'].min()), 2) if not dw.empty else None,
             'rsi_1h': rsi(dh['Close']) if not dh.empty else None,
-            'rsi_1d': rsi(d1['Close']),
+            'rsi_1d': rsi_1d,
             'rsi_1w': rsi(dw['Close']) if not dw.empty else None,
             'bb': bb(d1['Close']),
-            'macd': macd(d1['Close']),
+            'macd': calc_macd(d1['Close']),
             'ma20': ma20,
             'ma50': ma50,
             'ma200': ma200,
@@ -148,6 +165,90 @@ def get_data(symbol, asset_type):
     except Exception as e:
         return {'error': str(e), 'symbol': symbol}
 
+def score_asset(data):
+    score = 5
+    rsi_1d = data.get('rsi_1d')
+    if rsi_1d:
+        if rsi_1d < 30: score += 2
+        elif rsi_1d > 70: score -= 2
+    bb_data = data.get('bb')
+    if bb_data:
+        if bb_data['signal'] == 'near_lower': score += 1
+        elif bb_data['signal'] == 'near_upper': score -= 1
+    if data.get('macd') == 'up': score += 1
+    if data.get('trend') == 'up': score += 1
+    if data.get('volume_signal') == 'high': score += 1
+    return max(1, min(10, score))
+
+def get_recommendation(score):
+    if score >= 7: return 'BUY'
+    if score <= 4: return 'SELL'
+    return 'HOLD'
+
+def get_direction(score):
+    if score >= 7: return 'LONG'
+    if score <= 4: return 'SHORT'
+    return 'HOLD'
+
+def build_telegram_message(session_name):
+    now = datetime.now().strftime('%d/%m/%Y %H:%M')
+    msg = f'<b>Market Scan ? {session_name}</b>\n'
+    msg += f'<i>{now}</i>\n\n'
+
+    for asset in ASSETS:
+        data = get_data(asset['symbol'], asset['type'])
+        if not data or data.get('error'):
+            msg += f"[!] {asset['name']} ? Error\n\n"
+            continue
+
+        score = score_asset(data)
+        rec = get_recommendation(score)
+        direction = get_direction(score)
+        emoji = '[GREEN]' if rec == 'BUY' else '[RED]' if rec == 'SELL' else '[YELLOW]'
+
+        rsi_1d = data.get('rsi_1d', 'N/A')
+        rsi_warn = ' [!]' if rsi_1d and (rsi_1d > 70 or rsi_1d < 30) else ''
+
+        msg += f"{emoji} <b>{asset['name']} ({asset['symbol']})</b>\n"
+        msg += f"[PRICE] Price: ${data['price']} ({'+' if data['change_pct'] > 0 else ''}{data['change_pct']}%)\n"
+        msg += f"[CHART] Score: {score}/10 | {rec} | {direction}\n"
+        msg += f"[UP] RSI daily: {rsi_1d}{rsi_warn} | MACD: {'?' if data.get('macd') == 'up' else '?'}\n"
+        msg += f"[TARGET] Support: {data.get('support_1d')} | Resistance: {data.get('resistance_1d')}\n"
+
+        if data.get('earnings_date'):
+            msg += f"[REPORT] Earnings: {data['earnings_date']}\n"
+
+        if data.get('fear_greed'):
+            fg = data['fear_greed']
+            msg += f"[FEAR] Fear&Greed: {fg['score']} ({fg['label']})\n"
+
+        msg += '\n'
+
+    return msg
+
+def run_scheduled_scan(session_name):
+    try:
+        msg = build_telegram_message(session_name)
+        send_telegram(msg)
+    except Exception as e:
+        send_telegram(f'Error ?scan: {str(e)}')
+
+def scheduler():
+    while True:
+        now = datetime.utcnow()
+        hour = now.hour
+        minute = now.minute
+        # 13:30 UTC = 16:30 Israel = Before NYSE Open
+        if hour == 13 and minute == 30:
+            threading.Thread(target=run_scheduled_scan, args=('Before NYSE Open',)).start()
+            time.sleep(61)
+        # 19:00 UTC = 22:00 Israel = Before NYSE Close
+        elif hour == 19 and minute == 0:
+            threading.Thread(target=run_scheduled_scan, args=('Before NYSE Close',)).start()
+            time.sleep(61)
+        else:
+            time.sleep(30)
+
 @app.route('/health')
 def health():
     return jsonify({'status': 'ok'})
@@ -158,6 +259,21 @@ def scan(symbol):
     if not asset:
         return jsonify({'error': 'not found'}), 404
     return jsonify(get_data(symbol, asset['type']))
+
+@app.route('/scan-all')
+def scan_all():
+    results = {}
+    for asset in ASSETS:
+        results[asset['symbol']] = get_data(asset['symbol'], asset['type'])
+    return jsonify(results)
+
+@app.route('/test-telegram')
+def test_telegram():
+    send_telegram('[OK] Bot connected! You will receive 2 scans per day.')
+    return jsonify({'status': 'sent'})
+
+scheduler_thread = threading.Thread(target=scheduler, daemon=True)
+scheduler_thread.start()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
