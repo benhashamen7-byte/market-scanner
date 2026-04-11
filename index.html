@@ -792,123 +792,99 @@ async function runScan() {
 }
 
 async function fetchMarketOverview() {
-  // Build summary of real scan results
+  // Build summary from real scan results
   const scanSummary = ASSETS.map(a => {
     const r = scanResults[a.symbol];
-    if (!r) return null;
+    if (!r || !r.live) return null;
+    const live = r.live;
     return {
       name: a.name,
       symbol: a.symbol,
-      type: a.type,
+      price: live.price,
+      change_pct: live.change_pct,
+      rsi_1d: live.rsi_1d,
+      rsi_1w: live.rsi_1w,
+      trend: live.trend,
+      macd: live.macd,
+      bb: live.bb?.signal,
+      volume: live.volume_signal,
+      support_1d: live.support_1d,
+      resistance_1d: live.resistance_1d,
+      analyst_rec: live.analyst_rec,
+      analyst_target: live.analyst_target,
       daily_score: r.daily?.score,
       daily_rec: r.daily?.recommendation,
       swing_score: r.swing?.score,
       swing_rec: r.swing?.recommendation,
-      rsi_1d: r.daily?.rsi_1d,
-      rsi_1w: r.swing?.rsi_1w,
-      volume: r.daily?.volume_signal,
-      bb: r.daily?.bb_signal,
-      trend: r.swing?.trend,
-      sentiment_score: r.sentiment?.score,
-      daily_direction: r.daily?.trade_setup?.direction,
-      swing_direction: r.swing?.trade_setup?.direction,
-      daily_confidence: r.daily?.trade_setup?.confidence,
-      swing_confidence: r.swing?.trade_setup?.confidence,
-      earnings_days: r.earnings?.days_until,
-      price_area: r.price_area,
     };
   }).filter(Boolean);
 
-  const prompt = `אתה אנליסט שוק בכיר. יש לך שתי משימות:
-
-## משימה 1 — סקירת רשימת המעקב
-ניתוח אמיתי שנעשה על 9 הנכסים הבאים:
-${JSON.stringify(scanSummary, null, 2)}
-
-## משימה 2 — ציד שוק כללי (נפרד לחלוטין מהרשימה למעלה)
-מצא מניות/נכסים מהשוק הרחב (לא מהרשימה למעלה) שיש עליהם:
-- תנודה חדה חריגה (5%+ ביום)
-- שיח חזק מאוד (Reddit/WallStreetBets, אנליסטים, טוויטר)
-- אפשרות לצפות את המהלך הבא שלהם
-
-## כללים חשובים:
-- שורה תחתונה בלבד — ללא הסברים
-- הכל בעברית
-- מספרים ריאליסטיים
-
-החזר JSON בלבד (ללא markdown):
-{
-  "market_pulse": "משפט אחד על דופק השוק הכללי עכשיו",
-
-  "watchlist_heroes": [
-    {
-      "symbol": "סימול מהרשימה",
-      "name": "שם",
-      "verdict": "שורה תחתונה אחת — למה זה הכי מעניין עכשיו",
-      "best_for": "יומי או סווינג",
-      "direction": "long או short",
-      "confidence": <מספר 1-10 — ממוצע weighted של כל הפרמטרים>
-    }
-  ],
-
-  "watchlist_avoid": [
-    {
-      "symbol": "סימול מהרשימה שכדאי להימנע ממנו עכשיו",
-      "reason": "סיבה קצרה"
-    }
-  ],
-
-  "market_hunters": [
-    {
-      "symbol": "סימול חדש מהשוק הרחב",
-      "name": "שם החברה",
-      "move": "כמה זז — +8% / -12% / צפי לתנודה",
-      "why_hot": "למה חם — מילה שתיים",
-      "buzz_source": "Reddit / אנליסטים / חדשות / אינסיידרס",
-      "can_ride": true,
-      "direction": "long או short",
-      "entry_idea": "רמת כניסה משוערת בקצרה",
-      "risk": "סיכון עיקרי במילה"
-    }
-  ],
-
-  "buzz_stocks": [
-    {
-      "symbol": "סימול",
-      "name": "שם",
-      "topic": "על מה מדברים",
-      "sentiment": "bull או bear",
-      "one_liner": "שורה תחתונה"
-    }
-  ],
-
-  "next_move_predictions": [
-    {
-      "symbol": "סימול — מהרשימה או מהשוק",
-      "name": "שם",
-      "prediction": "תחזית ספציפית — מה צפוי לקרות ומתי",
-      "basis": "על מה מבוסס — RSI/דוח/שיח/תבנית טכנית",
-      "probability": "גבוהה / בינונית / נמוכה"
-    }
-  ]
-}
-
-כלול 3-5 פריטים בכל קטגוריה. market_hunters צריך להיות מניות שלא ברשימת המעקב.`;
-
+  // Fetch hot movers from server
+  let hotMovers = [];
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1800,
-        messages: [{ role: 'user', content: prompt }]
-      })
-    });
-    const data = await res.json();
-    const text = data.content.map(b => b.text || '').join('');
-    return JSON.parse(text.replace(/```json|```/g, '').trim());
-  } catch(e) { return null; }
+    const res = await fetch(`${SERVER}/hot-movers`);
+    if (res.ok) hotMovers = await res.json();
+  } catch(e) {}
+
+  // Build overview from real data
+  const heroes = scanSummary
+    .filter(a => a.daily_score >= 7 || a.swing_score >= 7)
+    .sort((a,b) => Math.max(b.daily_score, b.swing_score) - Math.max(a.daily_score, a.swing_score))
+    .slice(0, 3)
+    .map(a => ({
+      symbol: a.symbol,
+      name: a.name,
+      verdict: `ציון ${Math.max(a.daily_score, a.swing_score)}/10 | ${a.daily_rec} יומי | ${a.swing_rec} סווינג`,
+      best_for: a.daily_score > a.swing_score ? 'יומי' : 'סווינג',
+      direction: a.daily_rec === 'קנייה' ? 'long' : 'short',
+      confidence: Math.max(a.daily_score, a.swing_score)
+    }));
+
+  const avoid = scanSummary
+    .filter(a => a.daily_score <= 4 && a.swing_score <= 4)
+    .slice(0, 2)
+    .map(a => ({
+      symbol: a.symbol,
+      reason: `ציון נמוך ${a.daily_score}/10 | RSI: ${a.rsi_1d}`
+    }));
+
+  const bullCount = scanSummary.filter(a => a.trend === 'up').length;
+  const pulse = bullCount >= 6 ? 'השוק בולי — רוב הנכסים במגמה עולה' :
+                bullCount <= 3 ? 'השוק בריש — רוב הנכסים במגמה יורדת' :
+                'שוק מעורב — כיוון לא ברור';
+
+  return {
+    market_pulse: pulse,
+    watchlist_heroes: heroes,
+    watchlist_avoid: avoid,
+    market_hunters: hotMovers.map(m => ({
+      symbol: m.symbol,
+      name: m.name,
+      move: `${m.change_pct > 0 ? '+' : ''}${m.change_pct}%`,
+      why_hot: Math.abs(m.change_pct) >= 10 ? 'תנודה חדה 10%+' : 'שיח חם',
+      buzz_source: 'Yahoo Finance Trending',
+      can_ride: true,
+      direction: m.change_pct > 0 ? 'long' : 'short',
+      entry_idea: `$${m.price}`,
+      risk: 'תנודתיות גבוהה'
+    })),
+    buzz_stocks: hotMovers.slice(0, 3).map(m => ({
+      symbol: m.symbol,
+      name: m.name,
+      topic: `תנודה של ${m.change_pct > 0 ? '+' : ''}${m.change_pct}% היום`,
+      sentiment: m.change_pct > 0 ? 'bull' : 'bear',
+      one_liner: `${m.name} זז ${Math.abs(m.change_pct)}% היום`
+    })),
+    next_move_predictions: scanSummary.slice(0, 3).map(a => ({
+      symbol: a.symbol,
+      name: a.name,
+      prediction: a.rsi_1d > 70 ? 'תיקון צפוי — RSI בקנייה יתר' :
+                  a.rsi_1d < 30 ? 'ריבאונד צפוי — RSI במכירה יתר' :
+                  `המשך מגמה ${a.trend === 'up' ? 'עולה' : 'יורדת'}`,
+      basis: `RSI ${a.rsi_1d} | MACD ${a.macd} | ${a.trend}`,
+      probability: a.daily_score >= 7 || a.daily_score <= 4 ? 'גבוהה' : 'בינונית'
+    }))
+  };
 }
 
 function renderOverview(ov) {
