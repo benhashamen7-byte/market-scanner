@@ -190,41 +190,86 @@ def get_direction(score):
     if score <= 4: return 'SHORT'
     return 'HOLD'
 
+def get_hot_movers():
+    hot = []
+    try:
+        r = requests.get(
+            'https://query1.finance.yahoo.com/v1/finance/trending/US?count=20',
+            timeout=10,
+            headers={'User-Agent': 'Mozilla/5.0'}
+        )
+        if r.ok:
+            quotes = r.json().get('finance', {}).get('result', [{}])[0].get('quotes', [])
+            symbols = [q.get('symbol', '') for q in quotes[:20] if q.get('symbol')]
+            for sym in symbols:
+                try:
+                    t = yf.Ticker(sym)
+                    d1 = t.history(period='2d', interval='1d')
+                    if d1.empty or len(d1) < 2:
+                        continue
+                    price = round(float(d1['Close'].iloc[-1]), 2)
+                    prev = round(float(d1['Close'].iloc[-2]), 2)
+                    chg = round((price - prev) / prev * 100, 2)
+                    if abs(chg) >= 10:
+                        info = t.info
+                        hot.append({
+                            'symbol': sym,
+                            'name': info.get('shortName', sym),
+                            'price': price,
+                            'change_pct': chg,
+                        })
+                except:
+                    continue
+    except:
+        pass
+    return sorted(hot, key=lambda x: abs(x['change_pct']), reverse=True)[:5]
+
 def build_telegram_message(session_name):
     now = datetime.now().strftime('%d/%m/%Y %H:%M')
-    msg = f'<b>Market Scan ? {session_name}</b>\n'
+    msg = f'<b>[SCAN] Market Scan - {session_name}</b>\n'
     msg += f'<i>{now}</i>\n\n'
 
     for asset in ASSETS:
         data = get_data(asset['symbol'], asset['type'])
         if not data or data.get('error'):
-            msg += f"[!] {asset['name']} ? Error\n\n"
+            msg += f"[!] {asset['name']} - Error\n\n"
             continue
 
         score = score_asset(data)
         rec = get_recommendation(score)
         direction = get_direction(score)
-        emoji = '[GREEN]' if rec == 'BUY' else '[RED]' if rec == 'SELL' else '[YELLOW]'
+        dot = '[G]' if rec == 'BUY' else '[R]' if rec == 'SELL' else '[Y]'
 
         rsi_1d = data.get('rsi_1d', 'N/A')
         rsi_warn = ' [!]' if rsi_1d and (rsi_1d > 70 or rsi_1d < 30) else ''
 
-        msg += f"{emoji} <b>{asset['name']} ({asset['symbol']})</b>\n"
-        msg += f"[PRICE] Price: ${data['price']} ({'+' if data['change_pct'] > 0 else ''}{data['change_pct']}%)\n"
-        msg += f"[CHART] Score: {score}/10 | {rec} | {direction}\n"
-        msg += f"[UP] RSI daily: {rsi_1d}{rsi_warn} | MACD: {'?' if data.get('macd') == 'up' else '?'}\n"
-        msg += f"[TARGET] Support: {data.get('support_1d')} | Resistance: {data.get('resistance_1d')}\n"
+        msg += f"{dot} <b>{asset['name']} ({asset['symbol']})</b>\n"
+        msg += f"Price: ${data['price']} ({'+' if data['change_pct'] > 0 else ''}{data['change_pct']}%)\n"
+        msg += f"Score: {score}/10 | {rec} | {direction}\n"
+        msg += f"RSI: {rsi_1d}{rsi_warn} | MACD: {'UP' if data.get('macd') == 'up' else 'DOWN'}\n"
+        msg += f"Sup: {data.get('support_1d')} | Res: {data.get('resistance_1d')}\n"
 
         if data.get('earnings_date'):
-            msg += f"[REPORT] Earnings: {data['earnings_date']}\n"
+            msg += f"Earnings: {data['earnings_date']}\n"
 
         if data.get('fear_greed'):
             fg = data['fear_greed']
-            msg += f"[FEAR] Fear&Greed: {fg['score']} ({fg['label']})\n"
+            msg += f"F&G: {fg['score']} ({fg['label']})\n"
 
         msg += '\n'
 
+    msg += '<b>--- HOT MOVERS (+/-10%) ---</b>\n'
+    hot = get_hot_movers()
+    if hot:
+        for m in hot:
+            arrow = 'UP' if m['change_pct'] > 0 else 'DOWN'
+            msg += f"{arrow} <b>{m['symbol']}</b> {m['name']}\n"
+            msg += f"   ${m['price']} | {'+' if m['change_pct'] > 0 else ''}{m['change_pct']}%\n"
+    else:
+        msg += 'No big movers found\n'
+
     return msg
+
 
 def run_scheduled_scan(session_name):
     try:
