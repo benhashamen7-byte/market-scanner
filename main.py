@@ -322,3 +322,6 @@ scheduler_thread.start()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
+@app.route('/hot-movers')
+def hot_movers():
+    return jsonify(get_hot_movers())
