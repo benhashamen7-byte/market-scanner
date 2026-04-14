@@ -276,18 +276,26 @@ def run_scheduled_scan(session_name):
         msg = build_telegram_message(session_name)
         send_telegram(msg)
     except Exception as e:
-        send_telegram(f'Error ?scan: {str(e)}')
+        send_telegram(f'Error scan: {str(e)}')
+
+def keep_alive():
+    while True:
+        try:
+            requests.get('https://market-scanner-1-aswt.onrender.com/health', timeout=10)
+        except:
+            pass
+        time.sleep(600)
 
 def scheduler():
     while True:
         now = datetime.utcnow()
         hour = now.hour
         minute = now.minute
-        # 13:30 UTC = 16:30 Israel = Before NYSE Open
-        if hour == 13 and minute == 30:
+        # 12:30 UTC = 15:30 Israel = 1hr before NYSE Open
+        if hour == 12 and minute == 30:
             threading.Thread(target=run_scheduled_scan, args=('Before NYSE Open',)).start()
             time.sleep(61)
-        # 19:00 UTC = 22:00 Israel = Before NYSE Close
+        # 19:00 UTC = 22:00 Israel = 1hr before NYSE Close
         elif hour == 19 and minute == 0:
             threading.Thread(target=run_scheduled_scan, args=('Before NYSE Close',)).start()
             time.sleep(61)
@@ -312,16 +320,25 @@ def scan_all():
         results[asset['symbol']] = get_data(asset['symbol'], asset['type'])
     return jsonify(results)
 
+@app.route('/hot-movers')
+def hot_movers():
+    return jsonify(get_hot_movers())
+
 @app.route('/test-telegram')
 def test_telegram():
     send_telegram('[OK] Bot connected! You will receive 2 scans per day.')
     return jsonify({'status': 'sent'})
 
+@app.route('/scan-now')
+def scan_now():
+    threading.Thread(target=run_scheduled_scan, args=('Manual Scan',)).start()
+    return jsonify({'status': 'scanning'})
+
 scheduler_thread = threading.Thread(target=scheduler, daemon=True)
 scheduler_thread.start()
 
+keepalive_thread = threading.Thread(target=keep_alive, daemon=True)
+keepalive_thread.start()
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
-@app.route('/hot-movers')
-def hot_movers():
-    return jsonify(get_hot_movers())
