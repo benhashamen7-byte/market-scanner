@@ -193,36 +193,47 @@ def get_direction(score):
 def get_hot_movers():
     hot = []
     try:
-        r = requests.get(
-            'https://query1.finance.yahoo.com/v1/finance/trending/US?count=20',
-            timeout=10,
-            headers={'User-Agent': 'Mozilla/5.0'}
-        )
-        if r.ok:
-            quotes = r.json().get('finance', {}).get('result', [{}])[0].get('quotes', [])
-            symbols = [q.get('symbol', '') for q in quotes[:20] if q.get('symbol')]
-            for sym in symbols:
-                try:
-                    t = yf.Ticker(sym)
-                    d1 = t.history(period='2d', interval='1d')
-                    if d1.empty or len(d1) < 2:
-                        continue
-                    price = round(float(d1['Close'].iloc[-1]), 2)
-                    prev = round(float(d1['Close'].iloc[-2]), 2)
-                    chg = round((price - prev) / prev * 100, 2)
-                    if abs(chg) >= 10:
-                        info = t.info
-                        hot.append({
-                            'symbol': sym,
-                            'name': info.get('shortName', sym),
-                            'price': price,
-                            'change_pct': chg,
-                        })
-                except:
-                    continue
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        # Yahoo Finance Day Gainers and Losers
+        urls = [
+            'https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?scrIds=day_gainers&count=25',
+            'https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?scrIds=day_losers&count=25',
+        ]
+        symbols_data = []
+        for url in urls:
+            try:
+                r = requests.get(url, timeout=10, headers=headers)
+                if r.ok:
+                    quotes = r.json().get('finance', {}).get('result', [{}])[0].get('quotes', [])
+                    for q in quotes:
+                        sym = q.get('symbol', '')
+                        chg = q.get('regularMarketChangePercent', 0)
+                        price = q.get('regularMarketPrice', 0)
+                        mkt_cap = q.get('marketCap', 0)
+                        name = q.get('shortName', sym)
+                        exchange = q.get('exchange', '')
+                        # Filter: 10%+ move, price > $5, market cap > $500M, major exchange
+                        if abs(chg) >= 10 and price >= 5 and mkt_cap >= 500000000 and exchange in ['NMS', 'NYQ', 'NGM', 'NCM']:
+                            hot.append({
+                                'symbol': sym,
+                                'name': name,
+                                'price': round(price, 2),
+                                'change_pct': round(chg, 2),
+                                'market_cap': mkt_cap,
+                            })
+            except:
+                continue
     except:
         pass
-    return sorted(hot, key=lambda x: abs(x['change_pct']), reverse=True)[:5]
+    # Remove duplicates and sort by absolute change
+    seen = set()
+    unique = []
+    for m in hot:
+        if m['symbol'] not in seen:
+            seen.add(m['symbol'])
+            unique.append(m)
+    return sorted(unique, key=lambda x: abs(x['change_pct']), reverse=True)[:8]
+
 
 def build_telegram_message(session_name):
     now = datetime.now().strftime('%d/%m/%Y %H:%M')
