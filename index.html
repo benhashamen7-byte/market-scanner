@@ -890,6 +890,7 @@ async function fetchMarketOverview() {
 function renderOverview(ov) {
   const panel = document.getElementById('overviewPanel');
   const body  = document.getElementById('overviewBody');
+  panel.classList.add('visible');
 
   const tag = (type, text) => {
     const cls = type === 'bull' ? 'tag-bull' : type === 'bear' ? 'tag-bear' : type === 'hot' ? 'tag-hot' : type === 'buzz' ? 'tag-buzz' : 'tag-watch';
